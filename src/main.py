@@ -10,11 +10,18 @@ Note = {}
 path_tone = "../material/tone/"
 path_output = "output.wav"
 
+path_count = "../material/voice/"
+
 Now = {
     "count": 0,
     "level": 0,
     "time": 0,
 }
+
+def _append_count(data, count,duration):
+        offset = duration/18 *SR
+        audio = load_wav(f"{path_count}{count}.wav")
+        data[int(offset):int(offset + len(audio))] += audio[:len(audio)]
 
 def load_wav(path: str) -> np.ndarray:
     data, sr = sf.read(path)
@@ -30,7 +37,7 @@ def load_wav(path: str) -> np.ndarray:
 
     return data.astype(np.float32)
 
-def append_up(f, duration_sec: float, carry: np.ndarray) -> np.ndarray:
+def append_up(f, duration_sec: float, carry: np.ndarray, count= None) -> np.ndarray:
     """
     1往復分の音声を書き出し、余った余韻（carry）を次へ引き継ぐ
     :param f: SoundFileのファイルオブジェクト
@@ -46,11 +53,17 @@ def append_up(f, duration_sec: float, carry: np.ndarray) -> np.ndarray:
     tail_samples = int(tail_sec * SR)
     buffer_len = lap_samples + tail_samples
     chunk_data = np.zeros(buffer_len, dtype=np.float32)
+    
+    if count:
+        _append_count(chunk_data, count, duration_sec)
 
     # 1. 前回の往復から持ち越された余韻を先頭に合流
     if carry is not None and len(carry) > 0:
         overlap_len = min(len(carry), buffer_len)
         chunk_data[:overlap_len] += carry[:overlap_len]
+
+
+
 
     # 2. 音階の配置（枠で切り詰めず、音源本来の長さをそのまま重ねる）
     up = ["c4", "d4", "e4", "f4", "g4", "a4", "b4", "c5"]
@@ -79,7 +92,7 @@ def append_up(f, duration_sec: float, carry: np.ndarray) -> np.ndarray:
     next_carry = chunk_data[lap_samples:]
     return next_carry
 
-def append_down(f, duration_sec: float, carry: np.ndarray) -> np.ndarray:
+def append_down(f, duration_sec: float, carry: np.ndarray, count = None) -> np.ndarray:
     """
     1往復分の音声を書き出し、余った余韻（carry）を次へ引き継ぐ
     :param f: SoundFileのファイルオブジェクト
@@ -100,6 +113,9 @@ def append_down(f, duration_sec: float, carry: np.ndarray) -> np.ndarray:
     if carry is not None and len(carry) > 0:
         overlap_len = min(len(carry), buffer_len)
         chunk_data[:overlap_len] += carry[:overlap_len]
+
+    if count:
+        _append_count(chunk_data, count, duration_sec)
 
     # 2. 音階の配置（枠で切り詰めず、音源本来の長さをそのまま重ねる）
     up = ["c5", "b4", "a4", "g4", "f4", "e4", "d4", "c4"]
@@ -129,7 +145,7 @@ def append_down(f, duration_sec: float, carry: np.ndarray) -> np.ndarray:
     return next_carry
 
 
-def append_up_lvup(f, duration_sec: float, next_duration_sec:float, carry: np.ndarray) -> np.ndarray:
+def append_up_lvup(f, duration_sec: float, next_duration_sec:float, carry: np.ndarray, count = None) -> np.ndarray:
     """
     1往復分の音声を書き出し、余った余韻（carry）を次へ引き継ぐ
     :param f: SoundFileのファイルオブジェクト
@@ -152,6 +168,9 @@ def append_up_lvup(f, duration_sec: float, next_duration_sec:float, carry: np.nd
     if carry is not None and len(carry) > 0:
         overlap_len = min(len(carry), buffer_len)
         chunk_data[:overlap_len] += carry[:overlap_len]
+
+    if count:
+        _append_count(chunk_data, count, duration_sec)
 
     # 2. 音階の配置（枠で切り詰めず、音源本来の長さをそのまま重ねる）
     up = ["c4", "d4", "e4", "f4", "g4", "a4", "b4", "c5"]
@@ -197,6 +216,48 @@ def append_up_lvup(f, duration_sec: float, next_duration_sec:float, carry: np.nd
     return next_carry
 
 
+def append_lvup(f, duration_sec: float, carry: np.ndarray) -> np.ndarray:
+    spb = duration_sec/9
+    samples = int(spb*SR)
+    tail = int(3*SR)
+    buffer_len = samples + tail
+    chunk_data = np.zeros(buffer_len, dtype=np.float32)
+
+    # 1. 前回の往復から持ち越された余韻を先頭に合流
+    if carry is not None and len(carry) > 0:
+        overlap_len = min(len(carry), buffer_len)
+        chunk_data[:overlap_len] += carry[:overlap_len]
+
+    bass_start = int(0)
+    for bass in ["c3", "c4", "c5"]:
+        audio = Note[bass]
+        end = bass_start + len(audio)
+        use_len = min(end, buffer_len) - bass_start
+        if use_len > 0:
+            chunk_data[bass_start:bass_start + use_len] += audio[:use_len]
+
+    bass_start = int((spb/4 *SR))
+    for bass in ["g4", "g5"]:
+        audio = Note[bass]
+        end = bass_start + len(audio)
+        use_len = min(end, buffer_len) - bass_start
+        if use_len > 0:
+            chunk_data[bass_start:bass_start + use_len] += audio[:use_len]
+
+    bass_start = int(2*(spb/4 *SR))
+
+    for bass in ["d5", "d6"]:
+        audio = Note[bass]
+        end = bass_start + len(audio)
+        use_len = min(end, buffer_len) - bass_start
+        if use_len > 0:
+            chunk_data[bass_start:bass_start + use_len] += audio[:use_len]
+    # 4. 今回の確定分（lap_samples）だけをファイルに追記
+    f.write(chunk_data[:samples])
+
+    # 5. はみ出した余韻を「次の回」のために返す
+    next_carry = chunk_data[samples:]
+    return next_carry
 
 
 def main():
@@ -211,9 +272,10 @@ def main():
 
         # ループで回すときは、carry をバトンタッチしていくだけ！
         # （例として 9秒の往復を3回連続で鳴らす場合）
-        carry = append_up(f, duration_sec=9.0, carry=carry)
-        carry = append_down(f, duration_sec=9.0, carry=carry)
-        carry = append_up_lvup(f, duration_sec=9.0, next_duration_sec=8, carry=carry)
+        carry = append_lvup(f, duration_sec=9.0, carry=carry)
+        carry = append_up(f, duration_sec=9.0, carry=carry, count=1)
+        carry = append_down(f, duration_sec=9.0, carry=carry, count=2)
+        carry = append_up_lvup(f, duration_sec=9.0, next_duration_sec=8, carry=carry,count=3)
         #carry = append_up(f, duration_sec=6.0, carry=carry)
         #carry = append_up(f, duration_sec=3.0, carry=carry)
 
