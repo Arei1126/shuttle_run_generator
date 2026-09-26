@@ -28,6 +28,10 @@ Now = {
 
 Levels = None
 
+def db_to_gain(db: float) -> float:
+	"""デシベル（dB）をリニア倍率に変換する"""
+	return 10.0 ** (db / 20.0)
+MASTER_GAIN = db_to_gain(1)
 
 def load_csv_as_indexed_list(filepath: str, id_column: str) -> List[Optional[Dict[str, str]]]:
 	"""
@@ -63,9 +67,6 @@ def load_csv_with_key(filepath: str, key_column: str) -> Dict[str, Dict[str, str
         return result
 
 
-def db_to_gain(db: float) -> float:
-	"""デシベル（dB）をリニア倍率に変換する"""
-	return 10.0 ** (db / 20.0)
 
 def _append_count(data, count,duration):
         offset = duration/18 *SR
@@ -104,7 +105,7 @@ def append_count(f, duration_sec, carry, count):
 
     f.write(chunk_data)
 
-    next_carry = chunk_data[lap_samples:]
+    next_carry = chunk_data[offset+len(audio):]
     return next_carry
 
 def append_up(f, duration_sec: float, carry: np.ndarray, count= None, final=False) -> np.ndarray:
@@ -159,7 +160,7 @@ def append_up(f, duration_sec: float, carry: np.ndarray, count= None, final=Fals
                 chunk_data[bass_start:bass_start + use_len] += audio[:use_len]
 
     # 4. 今回の確定分（lap_samples）だけをファイルに追記
-    f.write(chunk_data[:lap_samples])
+    f.write(chunk_data[:lap_samples] * MASTER_GAIN)
 
     # 5. はみ出した余韻を「次の回」のために返す
     next_carry = chunk_data[lap_samples:]
@@ -213,7 +214,7 @@ def append_down(f, duration_sec: float, carry: np.ndarray, count = None, final=F
                 chunk_data[bass_start:bass_start + use_len] += audio[:use_len]
 
     # 4. 今回の確定分（lap_samples）だけをファイルに追記
-    f.write(chunk_data[:lap_samples])
+    f.write(chunk_data[:lap_samples] * MASTER_GAIN)
 
     # 5. はみ出した余韻を「次の回」のために返す
     next_carry = chunk_data[lap_samples:]
@@ -284,7 +285,7 @@ def append_up_lvup(f, duration_sec: float, next_duration_sec:float, carry: np.nd
             chunk_data[bass_start:bass_start + use_len] += audio[:use_len]
 
     # 4. 今回の確定分（lap_samples）だけをファイルに追記
-    f.write(chunk_data[:lap_samples])
+    f.write(chunk_data[:lap_samples] * MASTER_GAIN)
 
     # 5. はみ出した余韻を「次の回」のために返す
     next_carry = chunk_data[lap_samples:]
@@ -354,7 +355,7 @@ def append_down_lvup(f, duration_sec: float, next_duration_sec:float, carry: np.
             chunk_data[bass_start:bass_start + use_len] += audio[:use_len]
 
     # 4. 今回の確定分（lap_samples）だけをファイルに追記
-    f.write(chunk_data[:lap_samples])
+    f.write(chunk_data[:lap_samples] * MASTER_GAIN)
 
     # 5. はみ出した余韻を「次の回」のために返す
     next_carry = chunk_data[lap_samples:]
@@ -474,7 +475,7 @@ def append_start(f, duration_sec: float, carry: np.ndarray) -> np.ndarray:
             chunk_data[bass_start:bass_start + use_len] += audio[:use_len]
 
     # 4. 今回の確定分（lap_samples）だけをファイルに追記
-    f.write(chunk_data[:lap_samples])
+    f.write(chunk_data[:lap_samples] * MASTER_GAIN)
 
     # 5. はみ出した余韻を「次の回」のために返す
     next_carry = chunk_data[lap_samples:]
