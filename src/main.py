@@ -5,16 +5,19 @@ import soundfile as sf
 import math
 from scipy.signal import resample_poly
 import csv
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 
 SR = 36000
 #SR = 44100
 Note = {}
 path_tone = "../material/tone/"
 path_output = "output.flac"
-path_levels = "./levels.csv"
 path_count = "../material/voice/"
 path_five = "../material/5sec.wav"
+path_start = "../material/start.wav"
+
+#path_levels = "./levels.csv"
+path_levels = "./level_test.csv"
 
 Now = {
     "count": 0,
@@ -22,9 +25,31 @@ Now = {
     "time": 0,
 }
 
-Count = 1
 
 Levels = None
+
+
+def load_csv_as_indexed_list(filepath: str, id_column: str) -> List[Optional[Dict[str, str]]]:
+	"""
+	連続する整数IDに基づいて、インデックスがIDと一致するリストを生成する。
+	IDが1始まりの場合、インデックス0には None を配置してズレを防ぐ。
+	"""
+	with open(filepath, mode="r", encoding="utf-8", newline="") as f:
+		reader = csv.DictReader(f)
+		# 0番インデックス用のダミーを初期配置
+		result: List[Optional[Dict[str, str]]] = [None]
+		
+		for expected_id, row in enumerate(reader, start=1):
+			current_id = int(row[id_column])
+			
+			# 連続性のバリデーション（データ破損や欠番の早期検知）
+			if current_id != expected_id:
+				raise ValueError(
+					f"IDの連続性が崩れています。期待値: {expected_id}, 実際: {current_id}"
+				)
+			result.append(dict(row))
+			
+	return result
 
 def load_csv_with_key(filepath: str, key_column: str) -> Dict[str, Dict[str, str]]:
         result: Dict[str, Dict[str, str]] = {}
@@ -239,6 +264,76 @@ def append_up_lvup(f, duration_sec: float, next_duration_sec:float, carry: np.nd
     next_carry = chunk_data[lap_samples:]
     return next_carry
 
+def append_down_lvup(f, duration_sec: float, next_duration_sec:float, carry: np.ndarray, count = None) -> np.ndarray:
+    """
+    1往復分の音声を書き出し、余った余韻（carry）を次へ引き継ぐ
+    :param f: SoundFileのファイルオブジェクト
+    :param duration_sec: 1往復の所要秒数
+    :param carry: 前回の往復からはみ出した余韻配列
+    :return: 次回の往復へ持ち越す余韻配列
+    """
+    lap_samples = int(duration_sec * SR)
+    spb = duration_sec / 9.0
+    nspb = next_duration_sec/9.0
+    lap_samples = int(spb*8*SR + nspb*SR) 
+
+    # 余韻を受け止めるため、作業バッファを長めに確保（例: +3秒分）
+    tail_sec = 3.0
+    tail_samples = int(tail_sec * SR)
+    buffer_len = lap_samples + tail_samples
+    chunk_data = np.zeros(buffer_len, dtype=np.float32)
+
+    # 1. 前回の往復から持ち越された余韻を先頭に合流
+    if carry is not None and len(carry) > 0:
+        overlap_len = min(len(carry), buffer_len)
+        chunk_data[:overlap_len] += carry[:overlap_len]
+
+    if count:
+        _append_count(chunk_data, count, duration_sec)
+
+    # 2. 音階の配置（枠で切り詰めず、音源本来の長さをそのまま重ねる）
+    up = ["c5", "b4", "a4", "g4", "f4", "e4", "d4", "c4"]
+    for i, note in enumerate(up):
+        audio = Note[note]
+        start = int((i * spb) * SR)
+        end = start + len(audio)
+
+        use_len = min(end, buffer_len) - start
+        if use_len > 0:
+            chunk_data[start:start + use_len] += audio[:use_len]
+
+    # 3. 8拍目チャイム（加速）
+    bass_start = int((8 * spb) * SR)
+    for bass in ["c3", "c4", "c5"]:
+        audio = Note[bass]
+        end = bass_start + len(audio)
+        use_len = min(end, buffer_len) - bass_start
+        if use_len > 0:
+            chunk_data[bass_start:bass_start + use_len] += audio[:use_len]
+
+    bass_start = int((8 * spb) * SR + (nspb/4 *SR))
+    for bass in ["g4", "g5"]:
+        audio = Note[bass]
+        end = bass_start + len(audio)
+        use_len = min(end, buffer_len) - bass_start
+        if use_len > 0:
+            chunk_data[bass_start:bass_start + use_len] += audio[:use_len]
+    bass_start = int((8 * spb) * SR + 2*(nspb/4 *SR))
+
+    for bass in ["d5", "d6"]:
+        audio = Note[bass]
+        end = bass_start + len(audio)
+        use_len = min(end, buffer_len) - bass_start
+        if use_len > 0:
+            chunk_data[bass_start:bass_start + use_len] += audio[:use_len]
+
+    # 4. 今回の確定分（lap_samples）だけをファイルに追記
+    f.write(chunk_data[:lap_samples])
+
+    # 5. はみ出した余韻を「次の回」のために返す
+    next_carry = chunk_data[lap_samples:]
+    return next_carry
+
 
 def append_lvup(f, duration_sec: float, carry: np.ndarray) -> np.ndarray:
     spb = duration_sec/9
@@ -310,6 +405,55 @@ def five_count(f) -> np.ndarray:
     return next_carry
 
 
+def append_start(f, duration_sec: float, carry: np.ndarray) -> np.ndarray:
+    lap_samples = int(duration_sec * SR)
+    spb = duration_sec / 9.0
+
+    # 余韻を受け止めるため、作業バッファを長めに確保（例: +3秒分）
+    tail_sec = 3.0
+    tail_samples = int(tail_sec * SR)
+    buffer_len = lap_samples + tail_samples
+    chunk_data = np.zeros(buffer_len, dtype=np.float32)
+ 
+
+    # 1. 前回の往復から持ち越された余韻を先頭に合流
+    if carry is not None and len(carry) > 0:
+        overlap_len = min(len(carry), buffer_len)
+        chunk_data[:overlap_len] += carry[:overlap_len]
+
+    # スタート音声
+    audio = load_wav(path_start)
+    offset = int(spb/2 * SR)
+    chunk_data[offset:offset+len(audio)] += audio[:len(audio)]
+
+
+    # 2. 音階の配置（枠で切り詰めず、音源本来の長さをそのまま重ねる）
+    up = ["c4", "d4", "e4", "f4", "g4", "a4", "b4", "c5"]
+    for i, note in enumerate(up):
+        audio = Note[note]
+        start = int((i * spb) * SR)
+        end = start + len(audio)
+
+        use_len = min(end, buffer_len) - start
+        if use_len > 0:
+            chunk_data[start:start + use_len] += audio[:use_len]
+
+    # 3. 8拍目の重ね合わせ
+    bass_start = int((8 * spb) * SR)
+    for bass in ["c3", "c4"]:
+        audio = Note[bass]
+        end = bass_start + len(audio)
+        use_len = min(end, buffer_len) - bass_start
+        if use_len > 0:
+            chunk_data[bass_start:bass_start + use_len] += audio[:use_len]
+
+    # 4. 今回の確定分（lap_samples）だけをファイルに追記
+    f.write(chunk_data[:lap_samples])
+
+    # 5. はみ出した余韻を「次の回」のために返す
+    next_carry = chunk_data[lap_samples:]
+    return next_carry
+
 def main():
     # pre process
     notes = ["c3", "c4", "d4", "e4", "f4", "g4", "a4", "b4", "c5", "d5", "g5", "c6", "d6"]
@@ -318,23 +462,47 @@ def main():
         if os.path.exists(filepath):
             Note[note] = load_wav(filepath)
     
-    Levels = load_csv_with_key(path_levels, "level")
+    Levels = load_csv_as_indexed_list(path_levels, "level")
+    max_level = len(Levels) - 1
+    print(f"max:{max_level}")
 
     #with sf.SoundFile(path_output, mode="w", samplerate=SR, channels=1, subtype="PCM_16") as f:
     with sf.SoundFile(path_output, mode="w", samplerate=SR, channels=1, format="FLAC") as f:
-        carry = None
+        
+        first_duration_sec = 0.02*60*60 / float(Levels[1]["speed"])
 
-        # ループで回すときは、carry をバトンタッチしていくだけ！
-        # （例として 9秒の往復を3回連続で鳴らす場合）
         carry = five_count(f)
-        carry = append_lvup(f, duration_sec=9.0, carry=carry)
-        carry = append_up(f, duration_sec=9.0, carry=carry, count=1)
-        carry = append_down(f, duration_sec=9.0, carry=carry, count=2)
-        carry = append_up_lvup(f, duration_sec=9.0, next_duration_sec=8, carry=carry,count=3)
-        #carry = append_up(f, duration_sec=6.0, carry=carry)
-        #carry = append_up(f, duration_sec=3.0, carry=carry)
+        carry = append_lvup(f, duration_sec=first_duration_sec, carry=carry)
+        carry = append_start(f,duration_sec=first_duration_sec, carry=carry)
 
-        # すべての往復が終わったあと、最後に残った余韻を書き出して綺麗に終わる
+        count = 1
+        for i in range(1, len(Levels)):
+            print(f"level:{i}")
+            target_count = int(Levels[i]["count_in_level"]) + count - 1
+
+            spd = float(Levels[i]["speed"])
+            duration_sec = 0.02*60*60 / spd
+
+            while(count < target_count):
+                is_odd = (count % 2 == 0)
+                if is_odd:
+                    carry = append_up(f, duration_sec=duration_sec, carry=carry, count=count)
+                else:
+                    carry = append_down(f, duration_sec=duration_sec, carry=carry, count=count)
+                count = count + 1
+
+            if i != max_level:      # 通常
+                next_duration_sec = 0.02*60*60/ float(Levels[i+1]["speed"])
+                is_odd = (count % 2 == 0)
+                if is_odd:
+                    carry = append_up_lvup(f, duration_sec=duration_sec, next_duration_sec=next_duration_sec, carry=carry, count=count)
+                else:
+                    carry = append_down_lvup(f, duration_sec=duration_sec, next_duration_sec=next_duration_sec, carry=carry, count=count)
+                count = count + 1
+            else: # 本当の最終回
+                count = count + 1
+                
+
         if carry is not None:
             f.write(carry)
 
