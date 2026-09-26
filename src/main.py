@@ -4,19 +4,43 @@ import numpy as np
 import soundfile as sf
 import math
 from scipy.signal import resample_poly
+import csv
+from typing import Dict, Any
 
-SR = 44100
+SR = 36000
+#SR = 44100
 Note = {}
 path_tone = "../material/tone/"
-path_output = "output.wav"
-
+path_output = "output.flac"
+path_levels = "./levels.csv"
 path_count = "../material/voice/"
+path_five = "../material/5sec.wav"
 
 Now = {
     "count": 0,
     "level": 0,
     "time": 0,
 }
+
+Count = 1
+
+Levels = None
+
+def load_csv_with_key(filepath: str, key_column: str) -> Dict[str, Dict[str, str]]:
+        result: Dict[str, Dict[str, str]] = {}
+        with open(filepath, mode="r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                record_key = row[key_column]
+                if record_key in result:
+                    raise ValueError(f"重複キーを検出しました: {record_key}")
+                result[record_key] = dict(row)
+        return result
+
+
+def db_to_gain(db: float) -> float:
+	"""デシベル（dB）をリニア倍率に変換する"""
+	return 10.0 ** (db / 20.0)
 
 def _append_count(data, count,duration):
         offset = duration/18 *SR
@@ -260,18 +284,49 @@ def append_lvup(f, duration_sec: float, carry: np.ndarray) -> np.ndarray:
     return next_carry
 
 
+def five_count(f) -> np.ndarray:
+    samples = int(5*SR)
+    tail = int(3*SR)
+    buffer_len = samples + tail
+    chunk_data = np.zeros(buffer_len, dtype=np.float32)
+
+    audio = load_wav(path_five)
+    #chunk_data[0:len(audio)] += audio[:len(audio)]
+
+    copy_len = min(len(audio), buffer_len)
+    chunk_data[:copy_len] += audio[:copy_len]
+
+    for i in range(3):
+        start = (i+2)*SR
+        audio = load_wav(f"{path_count}{3-i}.wav")
+        chunk_data[start:start + len(audio)] += audio[:len(audio)]
+
+
+    # 4. 今回の確定分（lap_samples）だけをファイルに追記
+    f.write(chunk_data[:samples])
+
+    # 5. はみ出した余韻を「次の回」のために返す
+    next_carry = chunk_data[samples:]
+    return next_carry
+
+
 def main():
+    # pre process
     notes = ["c3", "c4", "d4", "e4", "f4", "g4", "a4", "b4", "c5", "d5", "g5", "c6", "d6"]
     for note in notes:
         filepath = f"{path_tone}{note}.wav"
         if os.path.exists(filepath):
             Note[note] = load_wav(filepath)
+    
+    Levels = load_csv_with_key(path_levels, "level")
 
-    with sf.SoundFile(path_output, mode="w", samplerate=SR, channels=1, subtype="PCM_16") as f:
+    #with sf.SoundFile(path_output, mode="w", samplerate=SR, channels=1, subtype="PCM_16") as f:
+    with sf.SoundFile(path_output, mode="w", samplerate=SR, channels=1, format="FLAC") as f:
         carry = None
 
         # ループで回すときは、carry をバトンタッチしていくだけ！
         # （例として 9秒の往復を3回連続で鳴らす場合）
+        carry = five_count(f)
         carry = append_lvup(f, duration_sec=9.0, carry=carry)
         carry = append_up(f, duration_sec=9.0, carry=carry, count=1)
         carry = append_down(f, duration_sec=9.0, carry=carry, count=2)
