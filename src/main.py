@@ -103,7 +103,9 @@ def append_count(f, duration_sec, carry, count):
     chunk_data[offset:offset+len(audio)] += audio[:len(audio)]
 
     f.write(chunk_data)
-    pass
+
+    next_carry = chunk_data[lap_samples:]
+    return next_carry
 
 def append_up(f, duration_sec: float, carry: np.ndarray, count= None, final=False) -> np.ndarray:
     """
